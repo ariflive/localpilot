@@ -4,11 +4,12 @@ from sqlalchemy import select
 from typing import List
 import uuid
 
-from app.db.session import get_db
-from app.models.task import Task, AgentResponse, ApprovalRequest
+from app.db.session import get_db, AsyncSessionLocal
+from app.models.task import Task, AgentResponse, ApprovalRequest, ExecutionLog
 from app.schemas.task import TaskCreate, TaskResponse, TaskDetail, ApprovalRequestCreate, ApprovalResponse
 from app.services.agent_core import agent_core
 from app.services.permission_manager import permission_manager
+from app.services.tool_executor import tool_executor
 
 router = APIRouter()
 
@@ -22,7 +23,12 @@ async def create_task(task_in: TaskCreate, db: AsyncSession = Depends(get_db)):
     await db.refresh(db_task)
 
     try:
-        result = await agent_core.process_task(task_in.description)
+        result = await agent_core.process_task(task_id, task_in.description)
+        if result.get("requires_approval"):
+            db_task.status = "pending_approval"
+            await db.commit()
+            await db.refresh(db_task)
+            return db_task
         if result.get("success"):
             agent_resp = AgentResponse(
                 id=str(uuid.uuid4()),
@@ -118,10 +124,51 @@ async def list_approvals(db: AsyncSession = Depends(get_db)):
 async def respond_approval(approval_id: str, response: ApprovalResponse):
     if response.action == "approve":
         success, msg = await permission_manager.approve_request(approval_id)
+        if not success:
+            raise HTTPException(status_code=400, detail=msg)
+        # Execute approved tool
+        async with AsyncSessionLocal() as session:
+            from sqlalchemy import select
+            result = await session.execute(select(ApprovalRequest).where(ApprovalRequest.id == approval_id))
+            approval = result.scalars().first()
+            if approval and approval.task_id:
+                exec_result = await tool_executor.execute(approval.task_id, approval.tool_name, approval.tool_args)
+                if exec_result.get("success"):
+                    # Mark task completed
+                    r2 = await session.execute(select(Task).where(Task.id == approval.task_id))
+                    task = r2.scalars().first()
+                    if task:
+                        task.status = "completed"
+                    agent_resp = AgentResponse(
+                        id=str(uuid.uuid4()),
+                        task_id=approval.task_id,
+                        response="Tool executed successfully",
+                        steps=[],
+                        status="completed",
+                    )
+                    session.add(agent_resp)
+                    await session.commit()
+                else:
+                    r2 = await session.execute(select(Task).where(Task.id == approval.task_id))
+                    task = r2.scalars().first()
+                    if task:
+                        task.status = "failed"
+                    await session.commit()
+        return {"approval_id": approval_id, "status": "approved"}
     elif response.action == "reject":
         success, msg = await permission_manager.reject_request(approval_id)
+        if not success:
+            raise HTTPException(status_code=400, detail=msg)
+        async with AsyncSessionLocal() as session:
+            from sqlalchemy import select
+            result = await session.execute(select(ApprovalRequest).where(ApprovalRequest.id == approval_id))
+            approval = result.scalars().first()
+            if approval and approval.task_id:
+                r2 = await session.execute(select(Task).where(Task.id == approval.task_id))
+                task = r2.scalars().first()
+                if task:
+                    task.status = "rejected"
+                await session.commit()
+        return {"approval_id": approval_id, "status": "rejected"}
     else:
         raise HTTPException(status_code=400, detail="Invalid action")
-    if not success:
-        raise HTTPException(status_code=400, detail=msg)
-    return {"approval_id": approval_id, "status": response.action + "d" if response.action == "approve" else "rejected"}

@@ -2,11 +2,12 @@
 
 
 class Tool:
-    def __init__(self, name: str, description: str, requires_approval: bool = False, allowed: bool = True):
+    def __init__(self, name: str, description: str, requires_approval: bool = False, allowed: bool = True, schema: Optional[Dict[str, Any]] = None):
         self.name = name
         self.description = description
         self.requires_approval = requires_approval
         self.allowed = allowed
+        self.schema = schema or {}
 
 
 class ToolRegistry:
@@ -16,15 +17,15 @@ class ToolRegistry:
 
     def _register_defaults(self):
         # Explicit allowlist - NO shell, NO python exec
-        self.register_tool("read_file", "Read a file from workspace", requires_approval=False)
-        self.register_tool("list_files", "List files in directory", requires_approval=False)
+        self.register_tool("read_file", "Read a file from workspace", requires_approval=False, schema={"required": ["path"]})
+        self.register_tool("list_files", "List files in directory", requires_approval=False, schema={"required": ["path"]})
         self.register_tool("search_files", "Search for files by pattern", requires_approval=False)
         self.register_tool("search_content", "Search content in files", requires_approval=False)
-        self.register_tool("web_search", "Search web (if needed)", requires_approval=True)
+        self.register_tool("web_search", "Search web (if needed)", requires_approval=True, schema={"required": ["query"]})
         self.register_tool("create_note", "Create a note", requires_approval=False)
 
-    def register_tool(self, name: str, description: str, requires_approval: bool = False):
-        self._tools[name] = Tool(name, description, requires_approval)
+    def register_tool(self, name: str, description: str, requires_approval: bool = False, schema: Optional[Dict[str, Any]] = None):
+        self._tools[name] = Tool(name, description, requires_approval, schema=schema)
 
     def get_tool(self, name: str) -> Optional[Tool]:
         return self._tools.get(name)
@@ -37,6 +38,17 @@ class ToolRegistry:
 
     def is_allowed(self, name: str) -> bool:
         return name in self._tools
+
+    def validate_args(self, name: str, args: Dict[str, Any]) -> bool:
+        tool = self.get_tool(name)
+        if not tool:
+            return False
+        schema = tool.schema or {}
+        required = schema.get("required", [])
+        for r in required:
+            if r not in args:
+                return False
+        return True
 
 
 tool_registry = ToolRegistry()

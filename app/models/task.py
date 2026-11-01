@@ -53,3 +53,4 @@ class ApprovalRequest(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     resolved_at = Column(DateTime(timezone=True), nullable=True)
     resolved_by = Column(String, nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
