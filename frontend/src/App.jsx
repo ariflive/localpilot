@@ -7,7 +7,6 @@ import Tasks from "./pages/Tasks";
 import Approvals from "./pages/Approvals";
 import ActivityLogs from "./pages/ActivityLogs";
 import Settings from "./pages/Settings";
-import "./App.css";
 
 function App() {
   return (
